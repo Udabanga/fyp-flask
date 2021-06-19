@@ -18,7 +18,25 @@ from scipy.io import wavfile
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder
 
+import json
+from json import JSONEncoder
+
 plt.switch_backend('agg')
+
+class Prediction:
+    def __init__(self, angry, disgust, fear, happy, neutral, sad, surprise):
+        self.angry = angry.item()
+        self.disgust= disgust.item()
+        self.fear = fear.item()
+        self.happy = happy.item()
+        self.neutral = neutral.item()
+        self.sad = sad.item()
+        self.surprise = surprise.item()
+
+# subclass JSONEncoder
+class JSONEncoder(JSONEncoder):
+        def default(self, o):
+            return o.__dict__
 
 @app.route('/api/uploadRecording', methods=['POST'])
 def upload_recording():
@@ -36,69 +54,33 @@ def upload_recording():
 
     
     # Spectrogram of input voice recording #
-    y, sr = librosa.load(file, res_type='kaiser_best' ,duration=3,sr=44100,offset=0.5)
-
-    mel_spect = librosa.feature.melspectrogram(
-        y=y, sr=sr, n_mels=128,fmax=8000)
-    mel_spect = librosa.power_to_db(mel_spect, ref=np.max)
-
-
-    log_spectrogram = np.mean(mel_spect, axis = 0)
-
-
-    librosa.display.specshow(
-        mel_spect, sr=sr, x_axis='time', y_axis='mel')
-
-    plt.title('Spectrogram')
-    # plt.colorbar(format='%+2.0f dB')
-    plt.savefig('spectrogram.jpeg')
-
-    image = BytesIO()
-    plt.savefig(image, format='jpg')
-    spectrogram_image = base64.encodestring(image.getvalue()).decode('utf-8')
-    # #
-
-    # # Get Prediction for Emotion
-    # df = pd.DataFrame(columns=['mel_spectrogram'])
-    # df.loc[0] = [log_spectrogram]
-    # df = pd.DataFrame(df['mel_spectrogram'].values.tolist())
-
-    # predicting_data= np.array(df.iloc[:, :])
-
-    # mean = np.mean(predicting_data, axis=1)
-    # std = np.std(predicting_data, axis=1)
-    # predicting_data = (predicting_data - mean)/std
-
-    # predictions = model.predict(predicting_data[:,:,np.newaxis])
-    # predictions=    predictions.argmax(axis=1)
-    # predictions = predictions.astype(int).flatten()
-    # predictions = (lb.inverse_transform((predictions)))
-
-    # print(predictions)
-    # #
-
+    spectrogram_name = "Mel-Spectrogram"
+    log_spectrogram1, spectrogram_image1 = get_mel_spectrogram(file, spectrogram_name)
 
     empty_df = pd.DataFrame(index=np.arange(1), columns=np.arange(259))
     df = pd.DataFrame(columns=['mel_spectrogram'])
 
-    df.loc[0] = [log_spectrogram]
+    df.loc[0] = [log_spectrogram1]
     df_combined = pd.concat([pd.DataFrame(df['mel_spectrogram'].values.tolist()), empty_df], ignore_index=True)
     df_combined = df_combined.fillna(0)
 
-    t_test= df_combined
-    t_test_array = np.array(t_test)
-    threed_test_array = t_test_array[:,:,np.newaxis]
-    threed_test_array.shape
+    audio_data= df_combined
+    audio_data_array = np.array(audio_data)
+    audio_data_3d_array = audio_data_array[:,:,np.newaxis]
 
 
+    # predictions = model.predict(audio_data_3d_array[:1])
+    # predictions = predictions.argmax(axis=1)
+    # predictions = predictions.astype(int).flatten()
+    # predictions = (lb.inverse_transform((predictions)))
 
-    predictions = model.predict(threed_test_array[:1])
-    predictions = predictions.argmax(axis=1)
-    predictions = predictions.astype(int).flatten()
-    predictions = (lb.inverse_transform((predictions)))
+    # print(predictions)
 
-    print(predictions)
+    m_predictions = model.predict(audio_data_3d_array[:1])
 
+    prediction = Prediction(m_predictions[0][0], m_predictions[0][1], m_predictions[0][2], m_predictions[0][3], m_predictions[0][4], m_predictions[0][5], m_predictions[0][6])
+
+    print(prediction)
 
     # Noise Reduction of input voice recording #
 
@@ -119,22 +101,53 @@ def upload_recording():
     f_nr = open(fname_nr, "rb")
     nr_audio = base64.b64encode(f_nr.read()).decode('utf-8')
 
-    y_nr, sr_nr = librosa.load('noise_reduced.wav')
-    mel_spect_nr = librosa.feature.melspectrogram(
-        y=y_nr, sr=sr_nr)
-    mel_spect_nr = librosa.power_to_db(mel_spect_nr, ref=np.max)
 
-    librosa.display.specshow(
-        mel_spect_nr, sr=sr_nr, x_axis='time', y_axis='mel')
-    plt.title('Noise Reduced Spectrogram')
-    plt.savefig('noise_reduced.jpeg')
+    spectrogram_name = "NR_Mel-Spectrogram"
+    log_spectrogram_nr, spectrogram_image_nr = get_mel_spectrogram(fname_nr, spectrogram_name)
 
-    image_nr = BytesIO()
-    plt.savefig(image_nr, format='jpg')
-    nr_spectrogram_image = base64.encodestring(image_nr.getvalue()).decode('utf-8')
+    # print(json.JSONEncoder().encode(prediction))
+    print(JSONEncoder().encode(prediction))
 
     return jsonify({
-        "spectrogram_image": spectrogram_image,
-        "nr_spectrogram_image": nr_spectrogram_image,
+        "spectrogram_image": spectrogram_image1,
+        "prediction" : JSONEncoder().encode(prediction),
+        "nr_spectrogram_image": spectrogram_image_nr,
         "nr_audio": nr_audio
     })
+
+
+def get_mel_spectrogram(file, spectrogram_name):
+    y, sr = librosa.load(file, res_type='kaiser_best' ,duration=3,sr=44100,offset=0.5)
+
+    mel_spect = librosa.feature.melspectrogram(
+        y=y, sr=sr, n_mels=128,fmax=8000)
+    mel_spect = librosa.power_to_db(mel_spect, ref=np.max)
+
+
+    log_spectrogram = np.mean(mel_spect, axis = 0)
+
+
+    librosa.display.specshow(
+        mel_spect, sr=sr, x_axis='time', y_axis='mel')
+
+    
+    if(spectrogram_name == "Mel-Spectrogram"):
+        plt.title('Mel-Spectrogram')
+        plt.savefig('spectrogram.jpeg')
+
+        # image = BytesIO()
+        # plt.savefig(image, format='jpg')
+        # spectrogram_image = base64.encodestring(image.getvalue()).decode('utf-8')
+
+    elif(spectrogram_name == "NR_Mel-Spectrogram"):
+        plt.title('Noise Reduced Mel-Spectrogram')
+        plt.savefig('noise_reduced.jpeg')
+        
+    image_nr = BytesIO()
+    plt.savefig(image_nr, format='jpg')
+    spectrogram_image = base64.encodestring(image_nr.getvalue()).decode('utf-8')
+    
+
+    
+
+    return log_spectrogram, spectrogram_image

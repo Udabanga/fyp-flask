@@ -38,11 +38,15 @@ class JSONEncoder(JSONEncoder):
         def default(self, o):
             return o.__dict__
 
+            # subclass JSONEncoder
+class JSONEncoderNR(JSONEncoder):
+        def default(self, o):
+            return o.__dict__
+
 @app.route('/api/uploadRecording', methods=['POST'])
 def upload_recording():
 
-    # Loading Model
-    model = load_model('model_1.h5')
+    
 
     # Labeles for Emotions
     lb = LabelEncoder()
@@ -50,6 +54,7 @@ def upload_recording():
 
     # Uploaded audio file is retreived 
     file = request.files['file']
+    noise_reduce_check = request.form['noiseReduction']
     rate, data = wavfile.read(file)
 
     
@@ -64,55 +69,49 @@ def upload_recording():
     df_combined = pd.concat([pd.DataFrame(df['mel_spectrogram'].values.tolist()), empty_df], ignore_index=True)
     df_combined = df_combined.fillna(0)
 
-    audio_data= df_combined
-    audio_data_array = np.array(audio_data)
-    audio_data_3d_array = audio_data_array[:,:,np.newaxis]
+    if(noise_reduce_check == 'false'):
+        prediction = get_prediction(df_combined)
 
+    ##########################################################################
 
-    # predictions = model.predict(audio_data_3d_array[:1])
-    # predictions = predictions.argmax(axis=1)
-    # predictions = predictions.astype(int).flatten()
-    # predictions = (lb.inverse_transform((predictions)))
+    ##########################################################################
 
-    # print(predictions)
-
-    m_predictions = model.predict(audio_data_3d_array[:1])
-
-    prediction = Prediction(m_predictions[0][0], m_predictions[0][1], m_predictions[0][2], m_predictions[0][3], m_predictions[0][4], m_predictions[0][5], m_predictions[0][6])
-
-    print(prediction)
 
     # Noise Reduction of input voice recording #
-
-    data = data.flatten() / 32768  # Converting 16bit integer sound file to a 32 bit floating point
-    # .flatten() fixed error "Invalid shape for monophonic audio" 
+    data = data.flatten() / 32768   # Converting 16bit integer sound file to a 32 bit floating point
+                                    # .flatten() fixed error "Invalid shape for monophonic audio" 
     noisy_part = data[:len(data)]          
 
     reduced_noise = nr.reduce_noise(
         audio_clip=data, noise_clip=noisy_part, verbose=False)
 
-    wavfile.write("noise_reduced.wav", rate,
-                  (reduced_noise * 32768).astype(np.int16))
-    # Convert back to 16bit integer and save audio file
-    ##
+    wavfile.write("noise_reduced.wav", rate, (reduced_noise * 32768).astype(np.int16)) # Convert back to 16bit integer and save audio file
 
     # Spectrogram of noise reduced voice recording #
     fname_nr = "noise_reduced.wav"
     f_nr = open(fname_nr, "rb")
-    nr_audio = base64.b64encode(f_nr.read()).decode('utf-8')
+    audio_nr = base64.b64encode(f_nr.read()).decode('utf-8')
 
 
     spectrogram_name = "NR_Mel-Spectrogram"
     log_spectrogram_nr, spectrogram_image_nr = get_mel_spectrogram(fname_nr, spectrogram_name)
 
-    # print(json.JSONEncoder().encode(prediction))
-    print(JSONEncoder().encode(prediction))
+    empty_df = pd.DataFrame(index=np.arange(1), columns=np.arange(259))
+    df = pd.DataFrame(columns=['mel_spectrogram'])
+
+    df.loc[0] = [log_spectrogram_nr]
+    df_combined = pd.concat([pd.DataFrame(df['mel_spectrogram'].values.tolist()), empty_df], ignore_index=True)
+    df_combined = df_combined.fillna(0)
+
+    if(noise_reduce_check == 'true'):
+        prediction = get_prediction(df_combined)
 
     return jsonify({
         "spectrogram_image": spectrogram_image1,
         "prediction" : JSONEncoder().encode(prediction),
-        "nr_spectrogram_image": spectrogram_image_nr,
-        "nr_audio": nr_audio
+        "spectrogram_image_nr": spectrogram_image_nr,
+        # "prediction_nr" : JSONEncoderNR().encode(prediction_nr),
+        "audio_nr": audio_nr
     })
 
 
@@ -121,23 +120,23 @@ def get_mel_spectrogram(file, spectrogram_name):
 
     mel_spect = librosa.feature.melspectrogram(
         y=y, sr=sr, n_mels=128,fmax=8000)
-    mel_spect = librosa.power_to_db(mel_spect, ref=np.max)
+
+    librosa.display.specshow(
+        librosa.power_to_db(mel_spect, ref=np.max), sr=sr, x_axis='time', y_axis='mel')
+
+    mel_spect = librosa.power_to_db(mel_spect)
 
 
     log_spectrogram = np.mean(mel_spect, axis = 0)
 
 
-    librosa.display.specshow(
-        mel_spect, sr=sr, x_axis='time', y_axis='mel')
+    
 
     
     if(spectrogram_name == "Mel-Spectrogram"):
         plt.title('Mel-Spectrogram')
         plt.savefig('spectrogram.jpeg')
 
-        # image = BytesIO()
-        # plt.savefig(image, format='jpg')
-        # spectrogram_image = base64.encodestring(image.getvalue()).decode('utf-8')
 
     elif(spectrogram_name == "NR_Mel-Spectrogram"):
         plt.title('Noise Reduced Mel-Spectrogram')
@@ -147,7 +146,18 @@ def get_mel_spectrogram(file, spectrogram_name):
     plt.savefig(image_nr, format='jpg')
     spectrogram_image = base64.encodestring(image_nr.getvalue()).decode('utf-8')
     
-
-    
-
     return log_spectrogram, spectrogram_image
+
+def get_prediction(df_combined):
+    # Loading Model
+    model = load_model('model_RAVDESS_TESS.h5')
+
+    audio_data= df_combined
+    audio_data_array = np.array(audio_data)
+    audio_data_3d_array = audio_data_array[:,:,np.newaxis]
+
+    m_predictions = model.predict(audio_data_3d_array[:1])
+
+    prediction = Prediction(m_predictions[0][0], m_predictions[0][1], m_predictions[0][2], m_predictions[0][3], m_predictions[0][4], m_predictions[0][5], m_predictions[0][6])
+
+    return prediction
